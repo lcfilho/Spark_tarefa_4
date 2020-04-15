@@ -1,0 +1,41 @@
+
+import org.apache.spark.sql.functions.{round,sqrt}
+
+val df_imoveis = spark.read.format("parquet").option("header","true").option("delimiter", ",").load("imoveis_20200402.gz.parquet")
+
+val df_estacao = spark.read.format("csv").option("header","true").option("delimiter", ",").load("estacoes2.csv")
+
+val df_imov = df_imoveis.filter(col("lat").isNotNull or col("lon").isNotNull or col("rua").isNotNull)
+
+df_imov.cache()
+
+df_estacao.cache()
+
+val df_diferenca = df_imov.crossJoin(df_estacao).withColumn("distancialat", (df_imov("lat") - df_estacao("lat"))).withColumn("distancialon", ((df_imov("lon") - df_estacao("lon") )))
+
+val df_distancia1 = df_diferenca.withColumn("distancia1", (sqrt(((df_diferenca("distancialat") * df_diferenca("distancialat")) + (df_diferenca("distancialon") * df_diferenca("distancialon"))))))
+
+val df_distancia2 = df_distancia1.withColumn("distancia2", (((df_distancia1("distancia1")))*60*1852))
+
+val df_distancia = df_distancia2.withColumn("distancia", (round(df_distancia2("distancia2")))).select("dataid","rua","bairro","estacao","tipo","distancia")
+
+df_distancia.cache()
+
+val df_dist = df_distancia.groupBy($"dataid").agg(min($"distancia").as("distancia"))
+
+val df_final1 = df_dist.join(df_distancia, Seq("dataid","distancia"),"left")
+
+val df_final = df_final1.select("dataid","rua","bairro","estacao","tipo","distancia").filter(col("distancia").isNotNull && col("rua").isNotNull)
+
+df_final.cache()
+
+df_final.coalesce(1).write.option("compression", "gzip").format("parquet").option("header","true").mode("overwrite").save("spark-gzip-final")
+
+val temparque = System.nanoTime()
+
+df_final.coalesce(1).write.format("csv").option("header","true").mode("overwrite").save("spark-snappy-final-csv")
+
+val tempcsv = System.nanoTime()
+
+val temptotal =  tempcsv - temparque
+
